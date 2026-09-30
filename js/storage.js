@@ -1,0 +1,35 @@
+/* Centralized local prototype storage. Replace this module with API/database calls for production. */
+const STORAGE_KEYS = { users: 'studenthub_users_v1', session: 'studenthub_session_v1', dataPrefix: 'studenthub_data_' };
+const DATA_COLLECTIONS = ['tasks', 'courses', 'timetable', 'exams', 'notes', 'gpa', 'attendance', 'expenses', 'studySessions', 'notifications', 'activities', 'pdfs'];
+function readJson(key, fallback) { try { const raw = localStorage.getItem(key); if (!raw) return fallback; const parsed = JSON.parse(raw); return parsed ?? fallback; } catch (error) { console.warn('StudentHub storage reset:', key, error); return fallback; } }
+function writeJson(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch (error) { console.error('StudentHub storage write failed:', error); return false; } }
+function getUsers() { return readJson(STORAGE_KEYS.users, []); }
+function saveUsers(users) { return writeJson(STORAGE_KEYS.users, Array.isArray(users) ? users : []); }
+function getSession() {
+  const local = readJson(STORAGE_KEYS.session, null);
+  if (local?.userId) return local;
+  try { return JSON.parse(sessionStorage.getItem(STORAGE_KEYS.session) || 'null'); } catch (error) { return null; }
+}
+function saveSession(userId, remember = true) { clearSession(); const value = JSON.stringify({ userId }); if (remember) localStorage.setItem(STORAGE_KEYS.session, value); else sessionStorage.setItem(STORAGE_KEYS.session, value); }
+function clearSession() { localStorage.removeItem(STORAGE_KEYS.session); sessionStorage.removeItem(STORAGE_KEYS.session); }
+function getCurrentUserId() { return getSession()?.userId || null; }
+function defaultUserData() { return { tasks: [], courses: [], timetable: [], exams: [], notes: [], gpa: [], attendance: [], expenses: [], studySessions: [], notifications: [], activities: [], pdfs: [], settings: { theme: 'light' } }; }
+function normalizeUserData(input) { const base = defaultUserData(); const source = input && typeof input === 'object' ? input : {}; const normalized = { ...base, ...source }; DATA_COLLECTIONS.forEach(key => { if (!Array.isArray(normalized[key])) normalized[key] = []; }); normalized.settings = { ...base.settings, ...(source.settings && typeof source.settings === 'object' ? source.settings : {}) }; return normalized; }
+function getUserData(userId = getCurrentUserId()) { if (!userId) return null; const key = STORAGE_KEYS.dataPrefix + userId; const normalized = normalizeUserData(readJson(key, defaultUserData())); if (!localStorage.getItem(key)) saveUserData(normalized, userId); return normalized; }
+function saveUserData(data, userId = getCurrentUserId()) { if (!userId) return false; return writeJson(STORAGE_KEYS.dataPrefix + userId, normalizeUserData(data)); }
+function updateUserData(updater, userId = getCurrentUserId()) { const current = getUserData(userId) || defaultUserData(); const next = updater(current) || current; saveUserData(next, userId); return normalizeUserData(next); }
+function makeId(prefix) { return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`; }
+function addActivity(type, message, metadata = {}) { updateUserData(data => ({ ...data, activities: [{ id: makeId('activity'), type, message, createdAt: new Date().toISOString(), metadata }, ...data.activities].slice(0, 40) })); }
+function addNotification(type, title, message, metadata = {}) { updateUserData(data => ({ ...data, notifications: [{ id: makeId('notification'), type, title, message, createdAt: new Date().toISOString(), read: false, ...metadata }, ...data.notifications].slice(0, 100) })); }
+function getCourseName(courseId, data = getUserData()) { return data?.courses?.find(course => course.id === courseId)?.title || 'No course'; }
+function dateTimeValue(date, time = '') { if (!date) return NaN; const parsed = new Date(`${date}T${time || '23:59'}`); return parsed.getTime(); }
+function taskIsOverdue(task, now = Date.now()) { return task.status !== 'completed' && Number.isFinite(dateTimeValue(task.date || task.deadline, task.time)) && dateTimeValue(task.date || task.deadline, task.time) < now; }
+function reminderOffset(reminder) { const table = { '5m': 5 * 60e3, '15m': 15 * 60e3, '30m': 30 * 60e3, '1h': 60 * 60e3, '1d': 24 * 60 * 60e3 }; return table[reminder] || 0; }
+function formatDateTime(iso) { return iso ? new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : ''; }
+function confirmDestructive(title, message, confirmLabel = 'Delete') { return window.confirm(`${title}\n\n${message}\n\nPress OK to ${confirmLabel.toLowerCase()} or Cancel to keep it.`); }
+function requestBrowserNotifications() { if (!('Notification' in window)) return Promise.resolve('unsupported'); if (Notification.permission === 'default') return Notification.requestPermission(); return Promise.resolve(Notification.permission); }
+function maybeSendBrowserNotification(title, message) { if ('Notification' in window && Notification.permission === 'granted') new Notification(title, { body: message }); }
+function processReminders() { const data = getUserData(); if (!data) return []; const now = Date.now(); const triggered = []; const updatedTasks = data.tasks.map(task => { const deadline = dateTimeValue(task.date || task.deadline, task.time); if (!task.reminder || task.reminderDelivered || !Number.isFinite(deadline)) return task; const reminderAt = deadline - reminderOffset(task.reminder); if (now >= reminderAt && now <= deadline + 60e3) { const message = `${task.title} is due ${task.time ? `at ${task.time}` : 'soon'}.`; triggered.push({ task, message }); return { ...task, reminderDelivered: true }; } return task; }); if (triggered.length) { const notifications = triggered.map(item => ({ id: makeId('notification'), type: 'reminder', title: 'Task reminder', message: item.message, createdAt: new Date().toISOString(), read: false, taskId: item.task.id })); saveUserData({ ...data, tasks: updatedTasks, notifications: [...notifications, ...data.notifications].slice(0, 100) }); triggered.forEach(item => maybeSendBrowserNotification('StudentHub reminder', item.message)); } return triggered; }
+function processOverdueTasks() { const data = getUserData(); if (!data) return []; const overdue = data.tasks.filter(task => taskIsOverdue(task)); const known = new Set(data.notifications.filter(item => item.type === 'overdue').map(item => item.taskId)); const newItems = overdue.filter(task => !known.has(task.id)); if (newItems.length) { const notifications = newItems.map(task => ({ id: makeId('notification'), type: 'overdue', title: 'Overdue task', message: `${task.title} is past its deadline.`, createdAt: new Date().toISOString(), read: false, taskId: task.id })); saveUserData({ ...data, notifications: [...notifications, ...data.notifications].slice(0, 100) }); } return overdue; }
+function processUserNotifications() { processReminders(); return processOverdueTasks(); }
+function clearUserData(userId) { if (userId) localStorage.removeItem(STORAGE_KEYS.dataPrefix + userId); }

@@ -1,0 +1,1 @@
+function attendancePercent(records) { return records.length ? Math.round(records.filter(record => record.present === true || String(record.present).toLowerCase() === 'yes').length / records.length * 100) : 0; }

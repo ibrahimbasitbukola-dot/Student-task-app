@@ -1,0 +1,1 @@
+function calculateGPA(records) { const totalCredits = records.reduce((sum, record) => sum + Number(record.credits || 0), 0); return totalCredits ? records.reduce((sum, record) => sum + Number(record.grade || 0) * Number(record.credits || 0), 0) / totalCredits : 0; }
