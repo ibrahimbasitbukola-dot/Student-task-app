@@ -10,7 +10,7 @@ function getSession() {
   if (local?.userId) return local;
   try { return JSON.parse(sessionStorage.getItem(STORAGE_KEYS.session) || 'null'); } catch (error) { return null; }
 }
-function saveSession(userId, remember = true) { clearSession(); const value = JSON.stringify({ userId }); if (remember) localStorage.setItem(STORAGE_KEYS.session, value); else sessionStorage.setItem(STORAGE_KEYS.session, value); }
+function saveSession(userId, remember = true) { clearSession(); const value = JSON.stringify({ userId }); try { (remember ? localStorage : sessionStorage).setItem(STORAGE_KEYS.session, value); return true; } catch (error) { console.error('StudentHub session write failed:', error); return false; } }
 function clearSession() { localStorage.removeItem(STORAGE_KEYS.session); sessionStorage.removeItem(STORAGE_KEYS.session); }
 function getCurrentUserId() { return getSession()?.userId || null; }
 function defaultUserData() { return { tasks: [], courses: [], timetable: [], exams: [], notes: [], gpa: [], attendance: [], expenses: [], studySessions: [], notifications: [], activities: [], pdfs: [], settings: { theme: 'light' } }; }
